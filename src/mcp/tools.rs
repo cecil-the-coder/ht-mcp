@@ -18,6 +18,11 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
             "inputSchema": take_snapshot_schema()
         }),
         serde_json::json!({
+            "name": "ht_take_screenshot",
+            "description": "Capture terminal screenshot as PNG image with full ANSI color support",
+            "inputSchema": take_screenshot_schema()
+        }),
+        serde_json::json!({
             "name": "ht_execute_command",
             "description": "Execute a command and return output",
             "inputSchema": execute_command_schema()

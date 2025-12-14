@@ -176,19 +176,37 @@ async fn handle_request(server: &mut HtMcpServer, request: Value) -> Value {
 
                     match server.handle_tool_call(tool_name, arguments).await {
                         Ok(result) => {
-                            let text_response = format_tool_response(tool_name, &result);
-                            json!({
-                                "jsonrpc": "2.0",
-                                "id": id,
-                                "result": {
-                                    "content": [
-                                        {
-                                            "type": "text",
-                                            "text": text_response
-                                        }
-                                    ]
-                                }
-                            })
+                            // Check if this is an image response (from screenshot)
+                            if let Some(image_data) = result.get("image") {
+                                json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id,
+                                    "result": {
+                                        "content": [
+                                            {
+                                                "type": "image",
+                                                "data": image_data["data"],
+                                                "mimeType": image_data["mimeType"]
+                                            }
+                                        ]
+                                    }
+                                })
+                            } else {
+                                // Regular text response
+                                let text_response = format_tool_response(tool_name, &result);
+                                json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id,
+                                    "result": {
+                                        "content": [
+                                            {
+                                                "type": "text",
+                                                "text": text_response
+                                            }
+                                        ]
+                                    }
+                                })
+                            }
                         }
                         Err(e) => {
                             error!("Tool call failed: {}", e);
@@ -284,6 +302,13 @@ fn format_tool_response(tool_name: &str, result: &serde_json::Value) -> String {
             format!(
                 "Terminal Snapshot (Session: {})\n\n```\n{}\n```",
                 session_id, snapshot
+            )
+        }
+        "ht_take_screenshot" => {
+            let session_id = result["sessionId"].as_str().unwrap_or("unknown");
+            format!(
+                "Screenshot captured successfully for session: {}\n\nReturning PNG image data.",
+                session_id
             )
         }
         "ht_execute_command" => {

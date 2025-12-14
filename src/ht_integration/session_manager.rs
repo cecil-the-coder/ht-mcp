@@ -1,6 +1,7 @@
 use crate::error::{HtMcpError, Result};
 use crate::mcp::types::*;
-use ht_core::{api::http, pty, pty::Winsize, session::Session};
+use base64::Engine;
+use ht_core::{api, pty, InputSeq, Session, Winsize};
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
@@ -12,8 +13,9 @@ use tracing::{error, info};
 // Enhanced command type that supports responses
 #[derive(Debug)]
 pub enum SessionCommand {
-    Input(Vec<ht_core::command::InputSeq>),
+    Input(Vec<InputSeq>),
     Snapshot(oneshot::Sender<String>),
+    Screenshot(oneshot::Sender<Vec<u8>>),
     Resize(usize, usize),
 }
 
@@ -72,7 +74,7 @@ impl SessionManager {
 
             // Start the HTTP server with HT's native implementation
             tokio::spawn(async move {
-                if let Ok(server_future) = http::start(listener, clients_tx_for_http).await {
+                if let Ok(server_future) = api::http::start(listener, clients_tx_for_http).await {
                     if let Err(e) = server_future.await {
                         error!("HTTP server error: {}", e);
                     }
@@ -134,6 +136,24 @@ impl SessionManager {
                                 // Get the current terminal text and send it back
                                 let text = session.get_text();
                                 let _ = response_tx.send(text);
+                            }
+                            Some(SessionCommand::Screenshot(response_tx)) => {
+                                // Get terminal view with color/styling data and render to PNG
+                                use crate::ht_integration::ScreenshotRenderer;
+
+                                let view = session.get_view();
+
+                                match ScreenshotRenderer::new()
+                                    .and_then(|renderer| renderer.render_with_colors(&view))
+                                {
+                                    Ok(png_bytes) => {
+                                        let _ = response_tx.send(png_bytes);
+                                    }
+                                    Err(e) => {
+                                        error!("Screenshot generation failed: {}", e);
+                                        let _ = response_tx.send(vec![]);
+                                    }
+                                }
                             }
                             Some(SessionCommand::Resize(cols, rows)) => {
                                 session.resize(cols, rows);
@@ -224,7 +244,7 @@ impl SessionManager {
             );
         }
 
-        let input_seqs: Vec<ht_core::command::InputSeq> =
+        let input_seqs: Vec<InputSeq> =
             args.keys.iter().map(|key| smart_parse_key(key)).collect();
 
         // Send keys via the command channel
@@ -277,6 +297,56 @@ impl SessionManager {
         Ok(serde_json::json!({
             "sessionId": args.session_id,
             "snapshot": snapshot
+        }))
+    }
+
+    pub async fn take_screenshot(&self, args: TakeScreenshotArgs) -> Result<serde_json::Value> {
+        let session = self
+            .sessions
+            .get(&args.session_id)
+            .ok_or_else(|| HtMcpError::SessionNotFound(args.session_id.clone()))?;
+
+        info!("Taking screenshot for session {}", args.session_id);
+
+        // Create a response channel for the screenshot
+        let (response_tx, response_rx) = oneshot::channel();
+
+        // Send screenshot command with response channel
+        session
+            .command_tx
+            .send(SessionCommand::Screenshot(response_tx))
+            .await
+            .map_err(|e| HtMcpError::Internal(format!("Failed to send screenshot command: {}", e)))?;
+
+        // Wait for the response with a timeout (longer than snapshot due to rendering)
+        let png_bytes = tokio::time::timeout(tokio::time::Duration::from_secs(10), response_rx)
+            .await
+            .map_err(|_| HtMcpError::Internal("Screenshot request timed out".to_string()))?
+            .map_err(|e| HtMcpError::Internal(format!("Failed to receive screenshot: {}", e)))?;
+
+        if png_bytes.is_empty() {
+            return Err(HtMcpError::ScreenshotError(
+                "Screenshot generation failed".to_string(),
+            ));
+        }
+
+        // Encode to base64
+        let base64_data = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+
+        info!(
+            "Generated screenshot for session {}: {} bytes PNG, {} base64 chars",
+            args.session_id,
+            png_bytes.len(),
+            base64_data.len()
+        );
+
+        // Return MCP image format
+        Ok(serde_json::json!({
+            "sessionId": args.session_id,
+            "image": {
+                "data": base64_data,
+                "mimeType": "image/png"
+            }
         }))
     }
 
@@ -375,7 +445,7 @@ fn create_winsize(cols: u16, rows: u16) -> Winsize {
 }
 
 /// Intelligently parse a key string as either a special key or literal text
-fn smart_parse_key(key: &str) -> ht_core::command::InputSeq {
+fn smart_parse_key(key: &str) -> InputSeq {
     if is_special_key(key) {
         ht_core::api::stdio::parse_key(key.to_string())
     } else {
@@ -586,13 +656,13 @@ This is a multiline commit message with:
         // The exact implementation details depend on ht_core, but we know it should handle this as text
         // This test mainly ensures no panics occur with complex input
         match parsed {
-            ht_core::command::InputSeq::Standard(text) => {
+            InputSeq::Standard(text) => {
                 assert!(
                     !text.is_empty(),
                     "Complex content should produce non-empty text"
                 );
             }
-            ht_core::command::InputSeq::Cursor(_, _) => {
+            InputSeq::Cursor(_, _) => {
                 // Also acceptable for complex content
             }
         }
@@ -701,7 +771,7 @@ Co-Authored-By: Memex <noreply@memex.tech>"#;
         let result = smart_parse_key(complex_commit);
 
         // Should be treated as standard key with original content passed through
-        if let ht_core::command::InputSeq::Standard(cmd) = result {
+        if let InputSeq::Standard(cmd) = result {
             assert!(cmd.contains("git commit"));
             assert!(cmd.contains("🤖"));
             assert!(cmd.contains("Co-Authored-By"));

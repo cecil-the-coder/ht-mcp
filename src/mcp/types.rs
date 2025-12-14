@@ -40,6 +40,12 @@ pub struct SnapshotResult {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct TakeScreenshotArgs {
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ExecuteCommandArgs {
     #[serde(rename = "sessionId")]
     pub session_id: String,
@@ -103,6 +109,20 @@ pub fn take_snapshot_schema() -> Value {
             "sessionId": {
                 "type": "string",
                 "description": "HT session ID"
+            }
+        },
+        "required": ["sessionId"],
+        "additionalProperties": false
+    })
+}
+
+pub fn take_screenshot_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "sessionId": {
+                "type": "string",
+                "description": "HT session ID to screenshot"
             }
         },
         "required": ["sessionId"],

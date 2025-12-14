@@ -82,6 +82,13 @@ impl HtMcpServer {
                 })?;
                 session_manager.take_snapshot(args).await
             }
+            "ht_take_screenshot" => {
+                let args: crate::mcp::types::TakeScreenshotArgs = serde_json::from_value(arguments)
+                    .map_err(|e| {
+                    HtMcpError::InvalidRequest(format!("Invalid arguments: {}", e))
+                })?;
+                session_manager.take_screenshot(args).await
+            }
             "ht_execute_command" => {
                 let args: crate::mcp::types::ExecuteCommandArgs = serde_json::from_value(arguments)
                     .map_err(|e| HtMcpError::InvalidRequest(format!("Invalid arguments: {}", e)))?;

@@ -19,6 +19,9 @@ pub enum HtMcpError {
     #[error("Internal error: {0}")]
     Internal(String),
 
+    #[error("Screenshot generation error: {0}")]
+    ScreenshotError(String),
+
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
